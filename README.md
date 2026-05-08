@@ -101,20 +101,3 @@ Ejecutar demo temporal:
 ```sh
 ./build/editor_core_demo
 ```
-
-## Pendiente para la siguiente etapa
-
-- UI tipo nano con ncurses.
-- Modulo de compresion antes de guardar.
-- Formato binario `.ceio`.
-- Persistencia con POSIX `write` y `mmap`.
-- Profiling con `strace` y `time`.
-
-El contrato importante para el siguiente companero es:
-
-- usar `editor_core_to_buffer` para obtener el texto que luego se comprimira y
-  guardara,
-- usar `editor_core_load_buffer` para cargar texto descomprimido o leido desde
-  otro modulo,
-- usar `editor_core_is_dirty` y `editor_core_mark_clean` para controlar cambios
-  pendientes.
