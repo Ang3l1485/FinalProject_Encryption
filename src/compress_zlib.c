@@ -10,7 +10,13 @@ int compress_buffer(
     unsigned char **output,
     size_t *output_size
 ) {
+    static const unsigned char empty_input = '\0';
     uLongf bound = compressBound(input_size);
+    const unsigned char *source = input_size == 0 ? &empty_input : input;
+
+    if (output == NULL || output_size == NULL || (input == NULL && input_size > 0)) {
+        return -1;
+    }
 
     *output = malloc(bound);
 
@@ -21,7 +27,7 @@ int compress_buffer(
     int result = compress(
         *output,
         &bound,
-        input,
+        source,
         input_size
     );
 
@@ -41,25 +47,33 @@ int decompress_buffer(
     unsigned char **output,
     size_t expected_size
 ) {
-    *output = malloc(expected_size);
+    static const unsigned char empty_input = '\0';
+    unsigned char *buffer = malloc(expected_size > 0 ? expected_size : 1u);
+    const unsigned char *source = input_size == 0 ? &empty_input : input;
 
-    if (*output == NULL) {
+    if (output == NULL || (input == NULL && input_size > 0)) {
+        free(buffer);
+        return -1;
+    }
+
+    if (buffer == NULL) {
         return -1;
     }
 
     uLongf final_size = expected_size;
 
     int result = uncompress(
-        *output,
+        buffer,
         &final_size,
-        input,
+        source,
         input_size
     );
 
     if (result != Z_OK) {
-        free(*output);
+        free(buffer);
         return -1;
     }
 
+    *output = buffer;
     return 0;
 }

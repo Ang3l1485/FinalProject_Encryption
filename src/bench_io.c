@@ -1,35 +1,54 @@
-#include "../include/editor_file.h"
+#include "benchmark_runner.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-int main() {
-    const char *text =
-        "Benchmark persistence test";
+static void print_usage(const char *program_name) {
+    fprintf(
+        stderr,
+        "Usage: %s --mode=baseline|compressed-write|compressed-mmap --size-mb=50 --output=archivo\n",
+        program_name
+    );
+}
 
-    clock_t start = clock();
+int main(int argc, char **argv) {
+    BenchmarkConfig config;
+    config.mode = BENCHMARK_MODE_BASELINE;
+    config.size_mb = 50;
+    config.output_path = NULL;
 
-    for (int i = 0; i < 1000; i++) {
-
-        save_ceio_file(
-            "bench.ceio",
-            (const unsigned char *)text,
-            strlen(text)
-        );
-
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--mode=", 7) == 0) {
+            if (benchmark_parse_mode(argv[i] + 7, &config.mode) != 0) {
+                fprintf(stderr, "Invalid benchmark mode\n");
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            continue;
+        }
+        if (strncmp(argv[i], "--size-mb=", 10) == 0) {
+            config.size_mb = (size_t)strtoul(argv[i] + 10, NULL, 10);
+            continue;
+        }
+        if (strncmp(argv[i], "--output=", 9) == 0) {
+            config.output_path = argv[i] + 9;
+            continue;
+        }
+        if (strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return EXIT_SUCCESS;
+        }
     }
 
-    clock_t end = clock();
+    if (config.output_path == NULL || config.size_mb == 0) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
 
-    double total =
-        (double)(end - start)
-        / CLOCKS_PER_SEC;
-
-    printf(
-        "Benchmark time: %f\n",
-        total
-    );
-
-    return 0;
+    /*
+     * The benchmark entry point only parses arguments. Timing and syscall
+     * metrics are collected externally with /usr/bin/time and strace -c.
+     */
+    return benchmark_run(&config) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
