@@ -1,4 +1,6 @@
 % time     seconds  usecs/call     calls    errors syscall
+
+se usa mmpap y compresion:
 ------ ----------- ----------- --------- --------- ----------------
  81.55    0.005870        1174         5           munmap
  11.16    0.000803         803         1           msync

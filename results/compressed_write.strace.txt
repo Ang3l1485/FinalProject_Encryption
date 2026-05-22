@@ -1,4 +1,5 @@
 % time     seconds  usecs/call     calls    errors syscall
+se usa write y compresión: 
 ------ ----------- ----------- --------- --------- ----------------
  98.61    0.003267         816         4           munmap
   0.91    0.000030           2        15           mmap

@@ -19,6 +19,9 @@ PERSISTENCE_OBJECTS := \
 	$(BUILD_DIR)/io_backend.o \
 	$(BUILD_DIR)/editor_file.o
 
+CRYPTO_OBJECTS := \
+	$(BUILD_DIR)/crypto_ceio.o
+
 APP_OBJECTS := \
 	$(BUILD_DIR)/editor_app.o \
 	$(BUILD_DIR)/editor_ui_ncurses.o
@@ -28,7 +31,7 @@ BENCH_OBJECTS := \
 
 .PHONY: all test valgrind clean profile
 
-all: $(BUILD_DIR)/editor $(BUILD_DIR)/bench_io $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file
+all: $(BUILD_DIR)/editor $(BUILD_DIR)/bench_io $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file $(BUILD_DIR)/test_crypto_ceio
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -54,6 +57,9 @@ $(BUILD_DIR)/io_backend.o: src/io_backend.c include/io_backend.h | $(BUILD_DIR)
 $(BUILD_DIR)/editor_file.o: src/editor_file.c include/editor_file.h include/ceio_format.h include/compress_zlib.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/crypto_ceio.o: src/crypto_ceio.c include/crypto_ceio.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/editor_app.o: src/editor_app.c include/editor_app.h include/editor_core.h include/editor_file.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
@@ -75,6 +81,9 @@ $(BUILD_DIR)/test_editor_core.o: tests/test_editor_core.c include/editor_core.h 
 $(BUILD_DIR)/test_editor_file.o: tests/test_editor_file.c include/editor_file.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/test_crypto_ceio.o: tests/test_crypto_ceio.c include/crypto_ceio.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/editor: $(BUILD_DIR)/main.o $(CORE_OBJECTS) $(PERSISTENCE_OBJECTS) $(APP_OBJECTS)
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@ $(LIBS_EDITOR)
 
@@ -87,13 +96,18 @@ $(BUILD_DIR)/test_editor_core: $(BUILD_DIR)/test_editor_core.o $(CORE_OBJECTS)
 $(BUILD_DIR)/test_editor_file: $(BUILD_DIR)/test_editor_file.o $(PERSISTENCE_OBJECTS)
 	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@ $(LIBS_COMMON)
 
-test: $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file
+$(BUILD_DIR)/test_crypto_ceio: $(BUILD_DIR)/test_crypto_ceio.o $(CRYPTO_OBJECTS)
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@ $(LIBS_COMMON)
+
+test: $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file $(BUILD_DIR)/test_crypto_ceio
 	./$(BUILD_DIR)/test_editor_core
 	./$(BUILD_DIR)/test_editor_file
+	./$(BUILD_DIR)/test_crypto_ceio
 
-valgrind: $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file
+valgrind: $(BUILD_DIR)/test_editor_core $(BUILD_DIR)/test_editor_file $(BUILD_DIR)/test_crypto_ceio
 	valgrind --leak-check=full --error-exitcode=1 ./$(BUILD_DIR)/test_editor_core
 	valgrind --leak-check=full --error-exitcode=1 ./$(BUILD_DIR)/test_editor_file
+	valgrind --leak-check=full --error-exitcode=1 ./$(BUILD_DIR)/test_crypto_ceio
 
 profile: $(BUILD_DIR)/bench_io | $(RESULTS_DIR)
 	chmod +x scripts/run_profile.sh

@@ -1,4 +1,6 @@
 % time     seconds  usecs/call     calls    errors syscall
+Se usa write sin compresión y con un buffer pequeño 
+
 ------ ----------- ----------- --------- --------- ----------------
  99.97   27.363309          33    819206           write
   0.02    0.006836        3418         2           munmap
