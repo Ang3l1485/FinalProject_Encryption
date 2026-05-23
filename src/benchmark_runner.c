@@ -9,11 +9,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static const unsigned char BENCH_KEY[] = "default_test_key";
+
 static int write_all_small_chunks(int fd, const unsigned char *data, size_t size) {
-    /*
-     * This intentionally uses very small write calls only as an academic
-     * baseline. The final editor should never save documents this way.
-     */
     size_t offset = 0;
     const size_t chunk_size = 64u;
 
@@ -83,12 +81,14 @@ static int run_compressed(const BenchmarkConfig *config, const unsigned char *da
         ? CEIO_IO_MMAP
         : CEIO_IO_WRITE;
 
-    /*
-     * The two compressed benchmark paths are comparable because they share the
-     * same compression and .ceio serialization pipeline and only change the
-     * final storage backend implementation.
-     */
-    return editor_file_save(config->output_path, data, size, mode);
+    return editor_file_save(
+        config->output_path,
+        data,
+        size,
+        mode,
+        BENCH_KEY,
+        sizeof(BENCH_KEY) - 1
+    );
 }
 
 int benchmark_parse_mode(const char *value, BenchmarkMode *out_mode) {

@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const unsigned char DEFAULT_KEY[16] = "default_test_key";
+
 static char *editor_app_strdup(const char *text) {
     size_t length = strlen(text) + 1;
     char *copy = malloc(length);
@@ -117,15 +119,22 @@ int editor_app_load(EditorApp *app) {
     if (app == NULL) {
         return -1;
     }
-    if (editor_file_load(app->filename, &buffer, &size) != 0) {
+
+    if (editor_file_load(
+            app->filename,
+            &buffer,
+            &size,
+            DEFAULT_KEY,
+            sizeof(DEFAULT_KEY)
+        ) != 0) {
         app->last_error = -1;
         editor_app_set_status(app, "Load failed");
         return -1;
     }
 
     int result = editor_core_load_buffer(&app->core, buffer, size);
-    /* buffer comes from editor_file_load and must be released after importing. */
     free(buffer);
+
     if (result != 0) {
         app->last_error = result;
         editor_app_set_status(app, "Could not import file into editor");
@@ -145,18 +154,22 @@ int editor_app_save(EditorApp *app) {
     if (app == NULL) {
         return -1;
     }
+
     if (editor_core_to_buffer(&app->core, &buffer, &size) != 0) {
         app->last_error = -1;
         editor_app_set_status(app, "Could not export text");
         return -1;
     }
 
-    /*
-     * The real editor never writes plain text to disk. It exports a temporary
-     * flat buffer only to hand it to the compressed persistence pipeline.
-     */
-    int result = editor_file_save(app->filename, buffer, size, app->io_mode);
-    /* buffer comes from editor_core_to_buffer and is released after saving. */
+    int result = editor_file_save(
+        app->filename,
+        buffer,
+        size,
+        app->io_mode,
+        DEFAULT_KEY,
+        sizeof(DEFAULT_KEY)
+    );
+
     free(buffer);
 
     if (result != 0) {

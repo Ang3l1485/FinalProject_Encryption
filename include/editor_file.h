@@ -9,19 +9,19 @@ int editor_file_save(
     const char *path,
     const unsigned char *text,
     size_t size,
-    CeioIoMode mode
+    CeioIoMode mode,
+    const unsigned char *key,
+    size_t key_size
 );
 
 int editor_file_load(
     const char *path,
     unsigned char **text,
-    size_t *size
+    size_t *size,
+    const unsigned char *key,
+    size_t key_size
 );
 
-/*
- * Compatibility wrappers kept for stage 2 tests and incremental integration.
- * The final editor should prefer editor_file_save/editor_file_load.
- */
 int save_ceio_file(
     const char *path,
     const unsigned char *text,
