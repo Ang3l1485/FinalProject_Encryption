@@ -158,26 +158,72 @@ write_summary() {
   b_elapsed="$(elapsed_to_seconds "$(elapsed_value compressed_write)")"
   c_elapsed="$(elapsed_to_seconds "$(elapsed_value encrypted_write)")"
 
-  cat > "${RESULTS_DIR}/benchmark_summary.md" <<EOF_SUMMARY
-# Benchmark summary
+  local a_size_label
+  local b_size_label
+  local c_size_label
+  local a_user_label
+  local b_user_label
+  local c_user_label
+  local a_sys_label
+  local b_sys_label
+  local c_sys_label
+  local a_elapsed_label
+  local b_elapsed_label
+  local c_elapsed_label
+  local size_impact
+  local user_impact
+  local sys_impact
+  local elapsed_impact
 
-| Metrica del Kernel | A. Clasico (Plano directo) | B. Solo Compresion | C. Compresion + Encriptacion | Impacto Final (A vs C) |
-|---|---:|---:|---:|---|
-| Tamano Transmitido (I/O) | $(bytes_to_mb "${a_size}") | $(bytes_to_mb "${b_size}") | $(bytes_to_mb "${c_size}") | $(percent_change "${a_size}" "${c_size}") (Ahorro de I/O si es negativo) |
-| Tiempo de CPU (User Mode) | $(seconds_to_ms "${a_user}") | $(seconds_to_ms "${b_user}") | $(seconds_to_ms "${c_user}") | $(percent_change "${a_user}" "${c_user}") (Costo CPU de comprimir+cifrar) |
-| Tiempo de Espera I/O | $(seconds_to_ms "${a_sys}") | $(seconds_to_ms "${b_sys}") | $(seconds_to_ms "${c_sys}") | $(percent_change "${a_sys}" "${c_sys}") (Proxy de latencia kernel/sys) |
-| Tiempo Total (Wall-clock) | $(seconds_to_ms "${a_elapsed}") | $(seconds_to_ms "${b_elapsed}") | $(seconds_to_ms "${c_elapsed}") | $(percent_change "${a_elapsed}" "${c_elapsed}") (Resultado final A vs C) |
+  a_size_label="$(bytes_to_mb "${a_size}")"
+  b_size_label="$(bytes_to_mb "${b_size}")"
+  c_size_label="$(bytes_to_mb "${c_size}")"
+  a_user_label="$(seconds_to_ms "${a_user}")"
+  b_user_label="$(seconds_to_ms "${b_user}")"
+  c_user_label="$(seconds_to_ms "${c_user}")"
+  a_sys_label="$(seconds_to_ms "${a_sys}")"
+  b_sys_label="$(seconds_to_ms "${b_sys}")"
+  c_sys_label="$(seconds_to_ms "${c_sys}")"
+  a_elapsed_label="$(seconds_to_ms "${a_elapsed}")"
+  b_elapsed_label="$(seconds_to_ms "${b_elapsed}")"
+  c_elapsed_label="$(seconds_to_ms "${c_elapsed}")"
+  size_impact="$(percent_change "${a_size}" "${c_size}")"
+  user_impact="$(percent_change "${a_user}" "${c_user}")"
+  sys_impact="$(percent_change "${a_sys}" "${c_sys}")"
+  elapsed_impact="$(percent_change "${a_elapsed}" "${c_elapsed}")"
 
-Escenarios usados:
-
-- A: \`baseline\`, texto plano directo con bloques de 4096 bytes.
-- B: \`compressed-write\`, compresion zlib sin cifrado.
-- C: \`encrypted-write\`, compresion zlib seguida de cifrado y formato \`.ceio\`.
-
-Evidencia complementaria de backend:
-
-- \`compressed-mmap\` y \`encrypted-mmap\` quedan en \`${RESULTS_DIR}/*mmap*.strace.txt\` y \`${RESULTS_DIR}/*mmap*.time.txt\`.
-EOF_SUMMARY
+  {
+    printf "# Benchmark summary\n\n"
+    printf "Tabla principal A/B/C\n\n"
+    printf "+----------------------------+--------------+--------------+--------------+-----------+\n"
+    printf "| %-26s | %12s | %12s | %12s | %9s |\n" \
+      "Metrica" "A Plano" "B Compresion" "C Comp+Crip" "A vs C"
+    printf "+----------------------------+--------------+--------------+--------------+-----------+\n"
+    printf "| %-26s | %12s | %12s | %12s | %9s |\n" \
+      "Tamano transmitido I/O" "${a_size_label}" "${b_size_label}" "${c_size_label}" "${size_impact}"
+    printf "| %-26s | %12s | %12s | %12s | %9s |\n" \
+      "CPU user mode" "${a_user_label}" "${b_user_label}" "${c_user_label}" "${user_impact}"
+    printf "| %-26s | %12s | %12s | %12s | %9s |\n" \
+      "Tiempo kernel/I/O" "${a_sys_label}" "${b_sys_label}" "${c_sys_label}" "${sys_impact}"
+    printf "| %-26s | %12s | %12s | %12s | %9s |\n" \
+      "Tiempo total wall-clock" "${a_elapsed_label}" "${b_elapsed_label}" "${c_elapsed_label}" "${elapsed_impact}"
+    printf "+----------------------------+--------------+--------------+--------------+-----------+\n\n"
+    printf "Lectura del impacto:\n\n"
+    printf -- "- Tamano transmitido: %s. Si es negativo, hay ahorro de I/O.\n" "${size_impact}"
+    printf -- "- CPU user mode: %s. Aqui se ve el costo de comprimir y cifrar.\n" "${user_impact}"
+    printf -- "- Tiempo kernel/I/O: %s. Se usa como proxy de latencia en kernel.\n" "${sys_impact}"
+    printf -- "- Tiempo total: %s. Este es el resultado final A contra C.\n\n" "${elapsed_impact}"
+    printf "Escenarios usados:\n\n"
+    printf "A. baseline\n"
+    printf "   Texto plano directo con bloques de 4096 bytes.\n\n"
+    printf "B. compressed-write\n"
+    printf "   Compresion zlib sin cifrado.\n\n"
+    printf "C. encrypted-write\n"
+    printf "   Compresion zlib seguida de cifrado y formato .ceio.\n\n"
+    printf "Evidencia complementaria:\n\n"
+    printf -- "- compressed-mmap y encrypted-mmap quedan en %s/*mmap*.strace.txt\n" "${RESULTS_DIR}"
+    printf "  y %s/*mmap*.time.txt.\n" "${RESULTS_DIR}"
+  } > "${RESULTS_DIR}/benchmark_summary.md"
 }
 
 # strace -c measures syscall counts and percentages per benchmark scenario.
