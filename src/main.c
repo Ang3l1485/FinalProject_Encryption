@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 static void print_usage(const char *program_name) {
     fprintf(
@@ -67,13 +66,10 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    if (access(filename, F_OK) == 0 && editor_app_load(&app) != 0) {
-        fprintf(stderr, "Could not load '%s'\n", filename);
-        editor_app_free(&app);
-        return EXIT_FAILURE;
-    }
-
     int ui_result = editor_ui_ncurses_run(&app);
+    if (ui_result != 0) {
+        fprintf(stderr, "%s\n", editor_app_get_status(&app));
+    }
     editor_app_free(&app);
 
     return ui_result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

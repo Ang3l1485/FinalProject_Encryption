@@ -1,12 +1,11 @@
 #include "editor_app.h"
 
+#include "crypto_ceio.h"
 #include "editor_file.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static const unsigned char DEFAULT_KEY[16] = "default_test_key";
 
 static char *editor_app_strdup(const char *text) {
     size_t length = strlen(text) + 1;
@@ -17,7 +16,7 @@ static char *editor_app_strdup(const char *text) {
     return copy;
 }
 
-static void editor_app_set_status(EditorApp *app, const char *message) {
+void editor_app_set_status(EditorApp *app, const char *message) {
     if (app == NULL || message == NULL) {
         return;
     }
@@ -96,6 +95,8 @@ int editor_app_init(EditorApp *app, const char *filename, CeioIoMode mode) {
     }
 
     app->io_mode = mode;
+    app->key = NULL;
+    app->key_size = 0;
     app->running = 1;
     app->last_error = 0;
     editor_app_set_status(app, "Ready");
@@ -107,9 +108,41 @@ void editor_app_free(EditorApp *app) {
         return;
     }
 
+    editor_app_clear_key(app);
     free(app->filename);
     app->filename = NULL;
     editor_core_free(&app->core);
+}
+
+int editor_app_set_key(EditorApp *app, const unsigned char *key, size_t key_size) {
+    unsigned char *locked_copy = NULL;
+
+    if (app == NULL || key == NULL || key_size == 0) {
+        return -1;
+    }
+
+    if (crypto_secure_alloc_key_copy(key, key_size, &locked_copy) != 0) {
+        return -1;
+    }
+
+    editor_app_clear_key(app);
+    app->key = locked_copy;
+    app->key_size = key_size;
+    return 0;
+}
+
+void editor_app_clear_key(EditorApp *app) {
+    if (app == NULL || app->key == NULL) {
+        return;
+    }
+
+    crypto_secure_free_key(app->key, app->key_size);
+    app->key = NULL;
+    app->key_size = 0;
+}
+
+int editor_app_has_key(const EditorApp *app) {
+    return app != NULL && app->key != NULL && app->key_size > 0;
 }
 
 int editor_app_load(EditorApp *app) {
@@ -119,13 +152,18 @@ int editor_app_load(EditorApp *app) {
     if (app == NULL) {
         return -1;
     }
+    if (!editor_app_has_key(app)) {
+        app->last_error = -1;
+        editor_app_set_status(app, "Encryption key required");
+        return -1;
+    }
 
     if (editor_file_load(
             app->filename,
             &buffer,
             &size,
-            DEFAULT_KEY,
-            sizeof(DEFAULT_KEY)
+            app->key,
+            app->key_size
         ) != 0) {
         app->last_error = -1;
         editor_app_set_status(app, "Load failed");
@@ -154,6 +192,11 @@ int editor_app_save(EditorApp *app) {
     if (app == NULL) {
         return -1;
     }
+    if (!editor_app_has_key(app)) {
+        app->last_error = -1;
+        editor_app_set_status(app, "Encryption key required");
+        return -1;
+    }
 
     if (editor_core_to_buffer(&app->core, &buffer, &size) != 0) {
         app->last_error = -1;
@@ -166,8 +209,8 @@ int editor_app_save(EditorApp *app) {
         buffer,
         size,
         app->io_mode,
-        DEFAULT_KEY,
-        sizeof(DEFAULT_KEY)
+        app->key,
+        app->key_size
     );
 
     free(buffer);
