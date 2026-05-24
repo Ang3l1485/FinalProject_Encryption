@@ -1,13 +1,17 @@
 #include "editor_ui_ncurses.h"
 
+#include "crypto_ceio.h"
 #include "io_backend.h"
 
 #include <ctype.h>
 #include <ncurses.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 #define CTRL_KEY(ch) ((ch) & 0x1f)
+#define EDITOR_UI_KEY_MAX 128u
 
 typedef struct {
     int row_offset;
@@ -155,10 +159,126 @@ static void editor_ui_draw(EditorApp *app, EditorViewport *viewport) {
     free(data);
 }
 
+static int editor_ui_prompt_hidden(
+    const char *prompt,
+    unsigned char *buffer,
+    size_t capacity,
+    size_t *out_size
+) {
+    size_t length = 0;
+    int rows = 0;
+    int cols = 0;
+
+    if (prompt == NULL || buffer == NULL || capacity == 0 || out_size == NULL) {
+        return -1;
+    }
+
+    memset(buffer, 0, capacity);
+    getmaxyx(stdscr, rows, cols);
+    curs_set(1);
+
+    for (;;) {
+        attron(A_REVERSE);
+        draw_truncated_line(rows - 1, cols, prompt);
+        attroff(A_REVERSE);
+        move(rows - 1, (int)strnlen(prompt, (size_t)cols));
+        refresh();
+
+        int key_code = getch();
+        if (key_code == '\n' || key_code == '\r') {
+            if (length == 0) {
+                beep();
+                continue;
+            }
+            *out_size = length;
+            return 0;
+        }
+
+        if (key_code == 27 || key_code == CTRL_KEY('q')) {
+            secure_zero_memory(buffer, capacity);
+            return -1;
+        }
+
+        if (key_code == KEY_BACKSPACE || key_code == 127 || key_code == '\b') {
+            if (length > 0) {
+                length--;
+                buffer[length] = 0;
+            }
+            continue;
+        }
+
+        if (key_code >= 32 && key_code <= 126) {
+            if (length + 1u >= capacity) {
+                beep();
+                continue;
+            }
+            buffer[length] = (unsigned char)key_code;
+            length++;
+        }
+    }
+}
+
+static int editor_ui_prompt_and_store_key(EditorApp *app, const char *prompt) {
+    unsigned char key_buffer[EDITOR_UI_KEY_MAX];
+    size_t key_size = 0;
+    int result = -1;
+
+    if (editor_ui_prompt_hidden(prompt, key_buffer, sizeof(key_buffer), &key_size) != 0) {
+        editor_app_set_status(app, "Key entry cancelled");
+        return -1;
+    }
+
+    result = editor_app_set_key(app, key_buffer, key_size);
+    secure_zero_memory(key_buffer, sizeof(key_buffer));
+
+    if (result != 0) {
+        editor_app_set_status(app, "Could not store key");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int editor_ui_ensure_key(EditorApp *app, const char *prompt) {
+    if (editor_app_has_key(app)) {
+        return 0;
+    }
+    return editor_ui_prompt_and_store_key(app, prompt);
+}
+
+static int editor_ui_load_existing_file(EditorApp *app, EditorViewport *viewport) {
+    const char *filename = editor_app_get_filename(app);
+
+    if (access(filename, F_OK) != 0) {
+        return 0;
+    }
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+        editor_ui_draw(app, viewport);
+        if (editor_ui_prompt_and_store_key(app, "Key to open file: ") != 0) {
+            return -1;
+        }
+        if (editor_app_load(app) == 0) {
+            return 0;
+        }
+        editor_app_clear_key(app);
+        editor_app_set_status(app, "Load failed; check key");
+    }
+
+    return -1;
+}
+
+static void editor_ui_save(EditorApp *app) {
+    if (editor_ui_ensure_key(app, "Key to save file: ") != 0) {
+        return;
+    }
+    editor_app_save(app);
+}
+
 static void editor_ui_handle_key(EditorApp *app, int key_code) {
     switch (key_code) {
         case CTRL_KEY('s'):
-            editor_app_save(app);
+            editor_ui_save(app);
             break;
         case CTRL_KEY('q'):
         case KEY_F(10):
@@ -222,6 +342,11 @@ int editor_ui_ncurses_run(EditorApp *app) {
     raw();
     noecho();
     keypad(stdscr, TRUE);
+
+    if (editor_ui_load_existing_file(app, &viewport) != 0) {
+        endwin();
+        return -1;
+    }
 
     while (editor_app_is_running(app)) {
         editor_ui_draw(app, &viewport);

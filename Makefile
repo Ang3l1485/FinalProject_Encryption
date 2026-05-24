@@ -60,13 +60,13 @@ $(BUILD_DIR)/editor_file.o: src/editor_file.c include/editor_file.h include/ceio
 $(BUILD_DIR)/crypto_ceio.o: src/crypto_ceio.c include/crypto_ceio.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/editor_app.o: src/editor_app.c include/editor_app.h include/editor_core.h include/editor_file.h include/io_backend.h | $(BUILD_DIR)
+$(BUILD_DIR)/editor_app.o: src/editor_app.c include/editor_app.h include/crypto_ceio.h include/editor_core.h include/editor_file.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/editor_ui_ncurses.o: src/editor_ui_ncurses.c include/editor_ui_ncurses.h include/editor_app.h include/io_backend.h | $(BUILD_DIR)
+$(BUILD_DIR)/editor_ui_ncurses.o: src/editor_ui_ncurses.c include/editor_ui_ncurses.h include/crypto_ceio.h include/editor_app.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/benchmark_runner.o: src/benchmark_runner.c include/benchmark_runner.h include/editor_file.h include/io_backend.h | $(BUILD_DIR)
+$(BUILD_DIR)/benchmark_runner.o: src/benchmark_runner.c include/benchmark_runner.h include/compress_zlib.h include/editor_file.h include/io_backend.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/main.o: src/main.c include/editor_app.h include/editor_ui_ncurses.h include/io_backend.h | $(BUILD_DIR)

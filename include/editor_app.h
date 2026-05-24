@@ -10,6 +10,8 @@ typedef struct {
     EditorCore core;
     char *filename;
     CeioIoMode io_mode;
+    unsigned char *key;
+    size_t key_size;
     int running;
     char status_message[256];
     int last_error;
@@ -20,6 +22,11 @@ void editor_app_free(EditorApp *app);
 
 int editor_app_load(EditorApp *app);
 int editor_app_save(EditorApp *app);
+
+int editor_app_set_key(EditorApp *app, const unsigned char *key, size_t key_size);
+void editor_app_clear_key(EditorApp *app);
+int editor_app_has_key(const EditorApp *app);
+void editor_app_set_status(EditorApp *app, const char *message);
 
 int editor_app_insert_char(EditorApp *app, unsigned char ch);
 int editor_app_backspace(EditorApp *app);

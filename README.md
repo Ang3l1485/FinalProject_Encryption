@@ -1,303 +1,147 @@
 # CEIO Editor
 
-Editor de texto en C/Linux con interfaz tipo nano basada en `ncurses` y
-persistencia comprimida en archivos `.ceio`.
+Editor de texto en C/Linux con interfaz `ncurses`, persistencia comprimida y
+cifrada en archivos `.ceio`, y evidencia reproducible de benchmarking/profiling.
 
-La extension `.ceio` significa `CEIO = Compressed Editor I/O`, y representa el
-formato binario comprimido definido para este proyecto.
+`.ceio` significa `CEIO = Compressed Editor I/O`. En la version actual el flujo
+real de guardado es:
 
-## 1. Objetivo del proyecto
+```text
+texto plano en RAM -> zlib -> crypto_ceio -> formato .ceio -> write/mmap
+```
 
-El proyecto busca construir un editor modular que permita editar texto en
-memoria y guardarlo comprimido, comparando ademas distintas estrategias de I/O
-(`write` y `mmap`) con evidencia real de rendimiento.
+## Objetivo
 
-## 2. Por que se usa ncurses
+- Editar texto en memoria con `GapBuffer`.
+- Guardar y cargar archivos `.ceio` comprimidos y cifrados.
+- Pedir la clave al usuario dentro del flujo visible, sin argumentos de CLI.
+- Comparar tres escenarios de rendimiento:
+  A. plano directo,
+  B. solo compresion,
+  C. compresion + encriptacion.
+- Generar evidencia con `strace -c`, `/usr/bin/time -v` y una tabla final para
+  la sustentacion.
 
-`ncurses` resuelve entrada por teclado, posicionamiento del cursor y redibujado
-de pantalla en terminal. Eso permite implementar una interfaz sencilla tipo
-nano sin mezclar la presentacion con la logica de compresion o de persistencia.
+## Modulos principales
 
-## 3. Por que la UI se separa del core
-
-La UI solo traduce teclas y dibuja el estado actual. El texto vive en
-`editor_core`, y el guardado/cargado vive en `editor_file`. 
-## 4. Arquitectura modular
-
-- `gap_buffer`: estructura eficiente para insertar y borrar cerca del cursor.
-- `editor_core`: nucleo de edicion en memoria y bandera `dirty`.
-- `compress_zlib`: compresion y descompresion en user space.
-- `ceio_format`: header y payload del formato `.ceio`.
-- `io_backend`: escritura real con `write` o `mmap`, lectura desde disco.
-- `editor_file`: pipeline de guardado/carga comprimida.
-- `editor_app`: coordinador entre UI, core y persistencia.
-- `editor_ui_ncurses`: interfaz de terminal y manejo de teclas.
-- `benchmark_runner` y `bench_io`: escenarios reproducibles de benchmark.
-
-### Diagrama de modulos
+- `editor_core`: logica de edicion en memoria.
+- `editor_ui_ncurses`: interfaz de terminal, teclas y entrada oculta de clave.
+- `editor_app`: coordina UI, core, persistencia y clave en RAM.
+- `compress_zlib`: compresion/descompresion.
+- `crypto_ceio`: cifrado simetrico ya integrado por el pipeline.
+- `ceio_format`: encabezado `.ceio` version 2, IV y payload cifrado.
+- `io_backend`: escritura final con `write` o `mmap`.
+- `benchmark_runner` / `bench_io`: escenarios reproducibles.
 
 ```mermaid
 flowchart LR
     UI["editor_ui_ncurses"] --> APP["editor_app"]
     APP --> CORE["editor_core"]
-    CORE --> GAP["gap_buffer"]
     APP --> FILE["editor_file"]
+    CORE --> FILE
     FILE --> ZLIB["compress_zlib"]
-    FILE --> FORMAT["ceio_format"]
-    FILE --> IO["io_backend"]
-    MAIN["main"] --> APP
-    MAIN --> UI
-    BENCH["bench_io / benchmark_runner"] --> FILE
-    BENCH --> IO
-```
-
-## Entregables academicos incluidos
-
-- Matriz de diseño del pipeline I/O.
-- Diagrama de flujo del paso de datos.
-- Explicacion de gestion de memoria en C.
-- Especificacion del formato binario `.ceio`.
-- Reporte de profiling como evidencia de ingenieria.
-
-Todo esto quedo consolidado en `docs/report.md`.
-
-## 5. Responsabilidades por modulo
-
-- `main.c`: parsea argumentos, elige modo de I/O, crea `EditorApp`, carga si el archivo existe, ejecuta la UI y libera recursos.
-- `editor_app.c`: conecta `editor_core` con `editor_file`, mantiene estado, filename, modo de I/O y mensajes de estado.
-- `editor_ui_ncurses.c`: inicializa `ncurses`, redibuja la pantalla y traduce teclas a llamadas sobre `editor_app`.
-- `editor_core.c`: edicion en memoria desacoplada de UI y archivos.
-- `editor_file.c`: serializa, comprime, guarda, lee, valida y descomprime archivos `.ceio`.
-- `io_backend.c`: implementa los dos backends comparables de escritura final.
-
-## 6. Pipeline de guardado
-
-```mermaid
-flowchart LR
-    UI["UI ncurses"] --> APP["editor_app_save"]
-    APP --> CORE["editor_core_to_buffer"]
-    CORE --> FILE["editor_file_save"]
-    FILE --> ZLIB["compress_zlib"]
-    ZLIB --> FORMAT["ceio_format"]
+    ZLIB --> CRYPTO["crypto_ceio"]
+    CRYPTO --> FORMAT["ceio_format"]
     FORMAT --> IO["io_backend write|mmap"]
     IO --> DISK["Disco"]
 ```
 
-## 7. Pipeline de carga
+## Interaccion con clave
 
-```mermaid
-flowchart LR
-    DISK["Disco"] --> IO["io_backend_read_file"]
-    IO --> FORMAT["ceio_format_parse"]
-    FORMAT --> ZLIB["decompress_buffer"]
-    ZLIB --> FILE["editor_file_load"]
-    FILE --> CORE["editor_core_load_buffer"]
-    CORE --> UI["UI ncurses"]
-```
+- La clave no se recibe por linea de comandos.
+- Si el archivo existe, la UI pide la clave al abrirlo.
+- Si es un archivo nuevo, la UI pide la clave en el primer `Ctrl+S`.
+- La clave se captura con `noecho()` en `ncurses`; no se muestra mientras se
+  escribe.
+- `EditorApp` guarda una copia temporal con `crypto_secure_alloc_key_copy()` y
+  la limpia con `crypto_secure_free_key()` al salir.
 
-## Diagramas de flujo de uso
+## Compilar y probar
 
-### Caso 1: crear o editar y guardar
-
-```mermaid
-flowchart TD
-    A["Abrir ./build/editor --io=write archivo.ceio"] --> B{"Existe el archivo?"}
-    B -- "Si" --> C["Cargar .ceio"]
-    B -- "No" --> D["Iniciar buffer vacio"]
-    C --> E["Editar en pantalla"]
-    D --> E
-    E --> F{"Ctrl+S?"}
-    F -- "Si" --> G["Exportar texto plano temporal"]
-    G --> H["Comprimir y serializar .ceio"]
-    H --> I["Guardar con write o mmap"]
-    I --> J["Mostrar mensaje de guardado"]
-    J --> E
-    F -- "No" --> K{"Salir?"}
-    K -- "F10 / Esc / Ctrl+Q" --> L["Liberar recursos y cerrar"]
-    K -- "Seguir editando" --> E
-```
-
-### Caso 2: benchmark y profiling
-
-```mermaid
-flowchart TD
-    A["make profile"] --> B["Compilar build/bench_io"]
-    B --> C["Ejecutar scripts/run_profile.sh"]
-    C --> D["Escenario baseline"]
-    C --> E["Escenario compressed-write"]
-    C --> F["Escenario compressed-mmap"]
-    D --> G["Guardar plain_50mb.txt"]
-    E --> H["Guardar write_50mb.ceio"]
-    F --> I["Guardar mmap_50mb.ceio"]
-    D --> J["Generar baseline.strace.txt y baseline.time.txt"]
-    E --> K["Generar compressed_write.strace.txt y compressed_write.time.txt"]
-    F --> L["Generar compressed_mmap.strace.txt y compressed_mmap.time.txt"]
-```
-
-## 8. Instalar dependencias
+Dependencias en Linux/WSL:
 
 ```sh
 sudo apt-get update
 sudo apt-get install build-essential zlib1g-dev libncurses-dev strace valgrind
 ```
 
-## 9. Compilar
+Compilar todo:
 
 ```sh
 make clean && make
 ```
 
-Se generan:
-
-- `build/editor`
-- `build/bench_io`
-- `build/test_editor_core`
-- `build/test_editor_file`
-
-## 10. Ejecutar el editor
-
-Modo `write`:
-
-```sh
-./build/editor --io=write documento.ceio
-```
-
-Modo `mmap`:
-
-```sh
-./build/editor --io=mmap documento.ceio
-```
-
-## 11. Guardar y salir
-
-- `Ctrl+S`: guardar
-- `Ctrl+Q`: salir
-- `F10` o `Esc`: salida alternativa si VS Code o la terminal interceptan `Ctrl+Q`
-- Flechas: mover cursor
-- `Backspace`: borrar antes del cursor
-- `Delete`: borrar en el cursor
-
-Nota: el movimiento vertical se calcula de forma sencilla a partir del buffer
-actual y de los saltos de linea. Es suficiente para la sustentacion y mantiene
-la UI desacoplada del nucleo de edicion.
-
-## 12. Ejecutar pruebas
+Pruebas no interactivas:
 
 ```sh
 make test
 ```
 
-## 13. Ejecutar profiling
+## Ejecutar el editor
+
+```sh
+./build/editor --io=write documento.ceio
+./build/editor --io=mmap documento.ceio
+```
+
+Teclas:
+
+- `Ctrl+S`: guardar, pidiendo clave si aun no existe en la sesion.
+- `Ctrl+Q`, `F10` o `Esc`: salir.
+- Flechas: mover cursor.
+- `Backspace` / `Delete`: borrar.
+
+## Benchmark reproducible
+
+Modos disponibles:
+
+```sh
+./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
+./build/bench_io --mode=compressed-write --size-mb=50 --output=results/compressed_write_50mb.bin
+./build/bench_io --mode=encrypted-write --size-mb=50 --output=results/encrypted_write_50mb.ceio
+./build/bench_io --mode=compressed-mmap --size-mb=50 --output=results/compressed_mmap_50mb.bin
+./build/bench_io --mode=encrypted-mmap --size-mb=50 --output=results/encrypted_mmap_50mb.ceio
+```
+
+Escenarios principales de la tabla:
+
+| Metrica del Kernel | A. Clasico (Plano directo) | B. Solo Compresion | C. Compresion + Encriptacion | Impacto Final (A vs C) |
+|---|---:|---:|---:|---|
+| Tamano Transmitido (I/O) | `baseline` | `compressed-write` | `encrypted-write` | Cambio porcentual de A a C |
+| Tiempo de CPU (User Mode) | `/usr/bin/time -v` | `/usr/bin/time -v` | `/usr/bin/time -v` | Costo extra de comprimir+cifrar |
+| Tiempo de Espera I/O | `System time` | `System time` | `System time` | Proxy de latencia kernel/sys |
+| Tiempo Total (Wall-clock) | `Elapsed` | `Elapsed` | `Elapsed` | Resultado final |
+
+Generar evidencia completa:
 
 ```sh
 make profile
 ```
 
-Esto compila `build/bench_io`, ejecuta los tres escenarios de benchmark y guarda
-resultados en `results/`.
+El script produce:
 
-## 14. Revisar resultados
+- `results/*.bench.txt`: salida directa del benchmark.
+- `results/*.strace.txt`: resumen de syscalls.
+- `results/*.time.txt`: `user`, `sys`, `elapsed`, memoria y pagina.
+- `results/benchmark_summary.md`: tabla final A/B/C/Impacto.
 
-```sh
-cat results/baseline.strace.txt
-cat results/compressed_write.strace.txt
-cat results/compressed_mmap.strace.txt
-cat results/baseline.time.txt
-cat results/compressed_write.time.txt
-cat results/compressed_mmap.time.txt
-```
-
-## 15. Validar que el archivo no esta en texto claro
+Tambien se puede bajar el tamano para pruebas rapidas:
 
 ```sh
-strings results/write_50mb.ceio | head
-hexdump -C results/write_50mb.ceio | head
+SIZE_MB=1 RESULTS_DIR=build/profile-test bash scripts/run_profile.sh
 ```
 
-## 16. Como interpretar las metricas
-
-- `calls` en `strace`: cantidad de llamadas al sistema por escenario. Sirve para
-  comparar si el baseline hace muchas escrituras pequenas y si `mmap` cambia el
-  patron respecto a `write`.
-- `user time`: tiempo consumido en user space. Aqui influye la compresion con
-  `zlib`.
-- `sys time`: tiempo consumido en kernel. Aqui influye la interaccion con el
-  sistema operativo.
-- `real time`: tiempo total observado desde afuera.
-- `final_size_bytes`: tamano real escrito en disco, clave para justificar la
-  compresion.
-
-Ademas, para el entregable academico:
-
-- comparar el patron de syscalls entre baseline y pipeline comprimido,
-- justificar el costo de CPU de `zlib` con `user time`,
-- justificar el costo de kernel con `sys time`,
-- verificar que `.ceio` no conserve el texto original en claro.
-
-## Benchmark reproducible
-
-Escenarios:
-
-1. `baseline-plain-small-writes`
-2. `compressed-write`
-3. `compressed-mmap`
-
-Ejemplos:
+## Validar que no queda texto claro
 
 ```sh
-./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
-./build/bench_io --mode=compressed-write --size-mb=50 --output=results/write_50mb.ceio
-./build/bench_io --mode=compressed-mmap --size-mb=50 --output=results/mmap_50mb.ceio
-```
-
-El benchmark imprime:
-
-- modo ejecutado,
-- tamano original,
-- tamano final,
-- porcentaje de reduccion,
-- archivo generado,
-- modo de I/O.
-
-El programa no inventa tiempos. Las mediciones reales se obtienen con:
-
-```sh
-strace -c -o results/baseline.strace.txt ./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
-/usr/bin/time -v -o results/baseline.time.txt ./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
-
-strace -c -o results/compressed_write.strace.txt ./build/bench_io --mode=compressed-write --size-mb=50 --output=results/write_50mb.ceio
-/usr/bin/time -v -o results/compressed_write.time.txt ./build/bench_io --mode=compressed-write --size-mb=50 --output=results/write_50mb.ceio
-
-strace -c -o results/compressed_mmap.strace.txt ./build/bench_io --mode=compressed-mmap --size-mb=50 --output=results/mmap_50mb.ceio
-/usr/bin/time -v -o results/compressed_mmap.time.txt ./build/bench_io --mode=compressed-mmap --size-mb=50 --output=results/mmap_50mb.ceio
-```
-
-## Valgrind
-
-```sh
-make valgrind
-```
-
-`make valgrind` solo ejecuta pruebas no interactivas. No intenta correr
-Valgrind sobre la UI de `ncurses`.
-
-## Estructura esperada de resultados
-
-```text
-results/
-  baseline.strace.txt
-  compressed_write.strace.txt
-  compressed_mmap.strace.txt
-  baseline.time.txt
-  compressed_write.time.txt
-  compressed_mmap.time.txt
-  plain_50mb.txt
-  write_50mb.ceio
-  mmap_50mb.ceio
+strings results/encrypted_write_50mb.ceio | head
+hexdump -C results/encrypted_write_50mb.ceio | head
 ```
 
 ## Reporte academico
 
-La guia para la sustentacion y la tabla para pegar resultados reales estan en:
+La defensa completa, incluyendo orden compresion-cifrado, manejo de llave en
+RAM, riesgo de swap, buffer de 4096 bytes, tabla final y preguntas trampa, esta
+en:
 
 - `docs/report.md`

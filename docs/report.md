@@ -1,337 +1,239 @@
-# Reporte Etapa 3
+# Reporte final CEIO
 
-## Introduccion
+## Objetivo de esta entrega
 
-Esta etapa completa el editor de archivos comprimidos en C/Linux con una
-interfaz de terminal basada en `ncurses`, integracion entre edicion en memoria y
-persistencia comprimida, y un flujo reproducible de benchmarking y profiling.
+Esta entrega conecta la parte visible del editor con el pipeline comprimido y
+cifrado, y deja la evidencia de benchmarking/profiling lista para sustentar el
+impacto de la encriptacion frente al costo de I/O.
 
-En este contexto, `.ceio` significa `CEIO = Compressed Editor I/O`, nombre
-elegido para el formato binario comprimido del editor.
+El proyecto ya tenia editor `ncurses`, persistencia `.ceio`, compresion y
+backends `write`/`mmap`. En esta rama se agrego la entrada de clave al flujo de
+usuario y se separaron los benchmarks en:
 
-## Objetivo del proyecto
+- A. clasico plano directo,
+- B. solo compresion,
+- C. compresion + encriptacion.
 
-Construir un editor de texto modular que permita:
+## Cambios en la interaccion con el usuario
 
-- editar contenido en memoria con `GapBuffer` y `editor_core`,
-- guardar y cargar archivos `.ceio` comprimidos con `zlib`,
-- comparar academicamente un baseline plano contra el pipeline comprimido,
-- comparar los backends de escritura `write` y `mmap`,
-- generar evidencia real con `strace -c`, `/usr/bin/time -v` y `valgrind`.
+La clave no viaja por argumentos de linea de comandos. La pide la interfaz
+`ncurses`:
 
-## Justificacion de ncurses
+- Al abrir un archivo existente, antes de llamar a `editor_app_load()`.
+- Al guardar un archivo nuevo, en el primer `Ctrl+S`.
+- Si la clave ya fue ingresada en la sesion, se reutiliza para no pedirla en
+  cada guardado.
 
-`ncurses` permite implementar una interfaz tipo nano dentro de la terminal sin
-mezclar la logica del editor con detalles de dibujo, teclado, refresco de
-pantalla o posicionamiento del cursor. Esto reduce complejidad frente a una TUI
-manual y deja clara la separacion de responsabilidades.
+La captura usa `noecho()`, por lo que la clave no se imprime en pantalla. Luego
+`editor_app_set_key()` copia la clave con `crypto_secure_alloc_key_copy()` y
+`editor_app_free()` la libera con `crypto_secure_free_key()`, que limpia la
+memoria antes del `free`.
 
-La navegacion vertical se resuelve con una estrategia sencilla basada en saltos
-de linea y posicion del cursor. Esto prioriza claridad del diseno sobre una TUI
-mas compleja.
-
-Para facilitar la demostracion en terminales integradas como VS Code, la UI
-acepta tambien `F10` y `Esc` como salida alternativa cuando `Ctrl+Q` es
-interceptado por el entorno.
-
-## Matriz de modulos
-
-| Modulo | Archivos | Responsable | Funcion | Requisito que cumple |
-|--------|----------|-------------|---------|----------------------|
-| GapBuffer | `include/gap_buffer.h`, `src/gap_buffer.c` | Integrante 1 | Edicion eficiente alrededor del cursor | Estructura central de texto |
-| editor_core | `include/editor_core.h`, `src/editor_core.c` | Integrante 1 | Operaciones logicas de edicion y bandera dirty | Nucleo desacoplado de UI e I/O |
-| compress_zlib | `include/compress_zlib.h`, `src/compress_zlib.c` | Integrante 2 | Compresion y descompresion en user space | Persistencia comprimida |
-| ceio_format | `include/ceio_format.h`, `src/ceio_format.c` | Integrante 2 | Header y serializacion del formato `.ceio` | Formato propio del proyecto |
-| io_backend | `include/io_backend.h`, `src/io_backend.c` | Integrante 2 | Escritura real con `write` o `mmap`, lectura para carga | Comparacion de backends |
-| editor_file | `include/editor_file.h`, `src/editor_file.c` | Integrante 2 | Pipeline de guardado/carga comprimido | Integracion persistente |
-| editor_app | `include/editor_app.h`, `src/editor_app.c` | Integrante 3 | Coordinacion entre UI, core y persistencia | Desacople arquitectura final |
-| editor_ui_ncurses | `include/editor_ui_ncurses.h`, `src/editor_ui_ncurses.c` | Integrante 3 | Interfaz de terminal, teclas y redibujado | Editor interactivo |
-| main | `src/main.c` | Integrante 3 | Punto de entrada y parseo de argumentos | Arranque corto y explicable |
-| benchmark_runner | `include/benchmark_runner.h`, `src/benchmark_runner.c` | Integrante 3 | Escenarios reproducibles de benchmark | Evidencia de rendimiento |
-| bench_io | `src/bench_io.c` | Integrante 3 | CLI del benchmark | Ejecucion automatizable |
-
-## Matriz del pipeline I/O
-
-| Etapa | Entrada | Salida | Modulo |
-|------|---------|--------|--------|
-| Exportar texto | `EditorCore` | buffer plano temporal | `editor_core_to_buffer` |
-| Comprimir | buffer plano | payload comprimido | `compress_zlib` |
-| Encapsular | payload comprimido | buffer `.ceio` | `ceio_format` |
-| Escribir | buffer `.ceio` | archivo en disco | `io_backend` |
-| Leer | archivo en disco | buffer `.ceio` | `io_backend` |
-| Decodificar | buffer `.ceio` | payload comprimido | `ceio_format` |
-| Descomprimir | payload comprimido | buffer plano | `compress_zlib` |
-| Importar texto | buffer plano | `EditorCore` | `editor_core_load_buffer` |
-
-## Matriz de diseño del pipeline I/O
-
-| Paso | Productor | Consumidor | Representacion de datos | Reserva/liberacion de memoria | Observacion |
-|------|-----------|------------|--------------------------|-------------------------------|-------------|
-| 1 | `editor_core` | `editor_app` | texto plano temporal | `editor_core_to_buffer` reserva, `editor_app_save` libera | Solo existe en RAM |
-| 2 | `editor_app` | `editor_file` | `unsigned char *` + `size_t` | Sin copia extra al entrar | Punto de integracion logica/persistencia |
-| 3 | `compress_zlib` | `ceio_format` | payload comprimido | `compress_buffer` reserva, `editor_file_save` libera | Compresion en user space |
-| 4 | `ceio_format` | `io_backend` | buffer serializado `.ceio` | `ceio_format_build` reserva, `editor_file_save` libera | Incluye header + payload |
-| 5 | `io_backend` | disco | bytes persistidos | Sin memoria extra relevante | Se compara `write` vs `mmap` |
-| 6 | disco | `io_backend` | archivo `.ceio` completo | `io_backend_read_file` reserva, `editor_file_load` libera | Lectura binaria |
-| 7 | `ceio_format` | `compress_zlib` | header parseado + payload | Sin copia del payload | El payload apunta dentro del buffer leido |
-| 8 | `compress_zlib` | `editor_core` | buffer plano restaurado | `decompress_buffer` reserva, `editor_app_load` libera | Se valida `crc32` |
-| 9 | `editor_core` | UI | estructura interna `GapBuffer` | Vida util controlada por `EditorApp` | El usuario vuelve a editar |
-
-## Diagrama de flujo detallado del paso de datos
-
-```mermaid
-flowchart TD
-    KEY["Teclado"] --> UI["ncurses UI"]
-    UI --> APP["EditorApp"]
-    APP --> OP{"Operacion"}
-    OP -- "Editar" --> CORE["EditorCore + GapBuffer"]
-    OP -- "Guardar" --> SNAP["editor_core_to_buffer"]
-    SNAP --> SAVE["editor_file_save"]
-    SAVE --> COMP["compress_zlib"]
-    COMP --> FMT["ceio_format_build"]
-    FMT --> IOW["io_backend write|mmap"]
-    IOW --> DISK["Disco"]
-    DISK --> IOR["io_backend_read_file"]
-    IOR --> PARSE["ceio_format_parse"]
-    PARSE --> DECOMP["decompress_buffer"]
-    DECOMP --> LOAD["editor_core_load_buffer"]
-    LOAD --> UI
-```
-
-## Diagrama textual del flujo de guardado
+## Pipeline final de guardado
 
 ```mermaid
 flowchart LR
-    UI["UI ncurses"] --> APP["editor_app_save"]
+    UI["ncurses: Ctrl+S / clave oculta"] --> APP["editor_app"]
     APP --> CORE["editor_core_to_buffer"]
     CORE --> FILE["editor_file_save"]
     FILE --> ZLIB["compress_zlib"]
-    ZLIB --> FORMAT["ceio_format_build"]
-    FORMAT --> IO["io_backend_write_file"]
-    IO --> DISK["Disco"]
+    ZLIB --> CRYPTO["crypto_ceio"]
+    CRYPTO --> FORMAT["ceio_format v2"]
+    FORMAT --> IO["write o mmap"]
+    IO --> DISK["archivo .ceio"]
 ```
 
-## Diagrama textual del flujo de carga
+## Pipeline final de carga
 
 ```mermaid
 flowchart LR
-    DISK["Disco"] --> IO["io_backend_read_file"]
+    UI["ncurses: clave oculta"] --> APP["editor_app_load"]
+    DISK["archivo .ceio"] --> IO["io_backend_read_file"]
     IO --> FORMAT["ceio_format_parse"]
-    FORMAT --> ZLIB["decompress_buffer"]
-    ZLIB --> FILE["editor_file_load"]
-    FILE --> CORE["editor_core_load_buffer"]
-    CORE --> APP["editor_app_load"]
-    APP --> UI["UI ncurses"]
+    FORMAT --> CRYPTO["crypto_ceio decrypt"]
+    CRYPTO --> ZLIB["decompress_buffer"]
+    ZLIB --> CORE["editor_core_load_buffer"]
+    CORE --> UI2["edicion en pantalla"]
 ```
 
-## Explicacion de GapBuffer
+## Por que se comprime antes de encriptar
 
-`GapBuffer` mantiene un hueco cerca del cursor. Insertar es eficiente porque se
-escribe dentro de ese hueco; mover el cursor desplaza bytes de un lado al otro
-del gap. Esto reduce costo respecto a desplazar el arreglo completo en cada
-insercion local.
-
-## Explicacion de compresion en User Space
-
-La compresion se hace con `zlib` en user space antes de escribir a disco. El
-kernel no comprime por si mismo el archivo; solamente recibe un buffer ya
-serializado. Por eso es valido comparar el costo de CPU de compresion con el
-costo de syscalls y de escritura final.
-
-## Explicacion del formato .ceio
-
-El formato `.ceio` incluye:
-
-- magic `CEIO`,
-- version del formato,
-- tamano original,
-- tamano comprimido,
-- `crc32` del texto original,
-- payload comprimido.
-
-Esto permite validar integridad minima y distinguir claramente el archivo
-comprimido del contenido plano del editor.
-
-## Manejo de texto enriquecido si aplica
-
-En esta version no se implementa texto enriquecido con estilos como negrilla,
-color o fuentes. Por eso el formato `.ceio` no contiene una tabla de estilos.
-La estructura binaria actual es minimalista y suficiente para texto plano
-comprimido.
-
-Especificacion binaria actual:
-
-- Bytes `0-3`: magic number `CEIO`.
-- Bytes `4-7`: version del formato.
-- Bytes `8-11`: tamano original sin comprimir.
-- Bytes `12-15`: tamano comprimido.
-- Bytes `16-19`: `crc32` del texto original.
-- Bytes `20...`: payload comprimido por `zlib`.
-
-
-## Gestion de memoria en C
-
-El proyecto usa `struct` pequeñas y con campos simples para mantener un layout
-facil de razonar:
-
-- `GapBuffer`: puntero + tres `size_t`.
-- `EditorCore`: `GapBuffer` + banderas `int`.
-- `EditorApp`: `EditorCore` + puntero a filename + modo de I/O + estado.
-- `CeioHeader`: campos de 32 bits de tamano fijo.
-
-Decisiones de diseño para reducir desperdicio y padding:
-
-- Se usan tipos enteros de ancho fijo en `CeioHeader` para que el encabezado sea
-  estable y facil de serializar.
-- Los campos del header tienen el mismo ancho logico, lo que reduce padding
-  impredecible respecto a mezclar `char`, `size_t` y `int`.
-- En las estructuras de estado se priorizó claridad y costo bajo de acceso; no
-  se usan arreglos sobredimensionados salvo `status_message`, que se justifica
-  para evitar asignaciones dinamicas frecuentes durante la UI.
-- El formato serializado no escribe structs arbitrarios del editor, solo el
-  `CeioHeader` y el payload comprimido.
-
-Control de fugas de memoria durante el ciclo de vida:
-
-- `editor_core_to_buffer` reserva un buffer plano y `editor_app_save` lo libera.
-- `editor_file_load` reserva un buffer descomprimido y `editor_app_load` lo libera
-  despues de pasarlo a `editor_core_load_buffer`.
-- `compress_buffer` y `ceio_format_build` reservan buffers temporales y
-  `editor_file_save` los libera al terminar.
-- `io_backend_read_file` reserva el archivo completo en memoria y
-  `editor_file_load` lo libera tras parsear y descomprimir.
-- `EditorApp` duplica el nombre de archivo al iniciar y lo libera en
-  `editor_app_free`.
-- `make valgrind` valida los modulos no interactivos para detectar fugas.
-
-Resumen del ciclo de vida:
+La compresion funciona encontrando repeticion y estructura en el texto. Un
+cifrado bien aplicado elimina patrones visibles: su salida se parece a datos de
+alta entropia. Por eso el orden correcto para este proyecto es:
 
 ```text
-init -> reservar estructuras base
-load/save -> reservar buffers temporales acotados por modulo
-transferir datos -> liberar temporal en el mismo nivel que lo solicito
-exit -> editor_app_free -> editor_core_free -> free(filename)
+texto plano -> compresion -> cifrado -> disco
 ```
 
-## Explicacion de write vs mmap
+Si se invierte el orden:
 
-`write` realiza llamadas explicitas al kernel para enviar bytes al archivo.
-`mmap` crea una region mapeada y el programa copia el buffer serializado dentro
-de esa region. En este proyecto ambos son comparables porque comparten el mismo
-payload `.ceio` y solo cambia el backend final de escritura.
+```text
+texto plano -> cifrado -> compresion -> disco
+```
 
-## Explicacion del benchmark
+`zlib` tendria poco que reducir porque el ciphertext ya no conserva patrones.
+El resultado seria mas CPU, tamano casi igual al cifrado original y menor
+rentabilidad de I/O. En la sustentacion, esta es una pregunta clave: primero se
+comprime para reducir bytes; despues se cifra para proteger esos bytes.
 
-Se miden tres escenarios:
+## Manejo de la llave en RAM
 
-1. `baseline`: escribe texto plano con muchas llamadas pequenas a `write`.
-2. `compressed-write`: usa el pipeline real y guarda con backend `write`.
-3. `compressed-mmap`: usa el pipeline real y guarda con backend `mmap`.
+La clave queda solamente en memoria de proceso durante la sesion:
 
-El baseline existe solo para comparacion academica. El editor final no debe
-guardar texto claro.
+- La UI recibe bytes ocultos.
+- `EditorApp` crea una copia con `crypto_secure_alloc_key_copy()`.
+- El buffer temporal de la UI se borra con `secure_zero_memory()`.
+- Al salir, `crypto_secure_free_key()` limpia y libera la copia guardada.
+- El codigo intenta bloquear memoria con `mlock` a traves de la API de crypto
+  cuando el sistema lo permite.
 
-## Explicacion de profiling con strace/time
+Limitacion importante: `mlock` puede fallar por permisos o limites del sistema.
+Aunque se haga limpieza de memoria, no se puede prometer seguridad perfecta si
+el sistema operativo pagina memoria a swap, si hay volcados de core, o si otro
+proceso privilegiado inspecciona memoria.
 
-- `strace -c` resume llamadas al sistema, cantidades y tiempo relativo en el kernel.
-- `/usr/bin/time -v` reporta tiempo real, tiempo de usuario, tiempo de sistema y memoria.
+## Riesgo con swap
 
-Estas metricas no se inventan dentro del programa: se obtienen desde afuera
-para mantener trazabilidad y reproducibilidad.
+El riesgo de swap es que una pagina de memoria que contiene la clave sea copiada
+al disco por el sistema operativo. Para mitigarlo:
 
-## Reporte de profiling: evidencia de ingenieria
+- se mantiene una sola copia de clave en `EditorApp`,
+- se borra el buffer temporal inmediatamente,
+- se intenta bloquear la memoria de la clave,
+- se libera y limpia al cerrar.
 
-La evidencia de ingenieria de esta etapa debe incluir:
+Para una defensa academica, la respuesta correcta es: se reduce el riesgo, pero
+no se elimina completamente sin politicas del sistema como swap deshabilitado,
+limites adecuados de `mlock`, y proteccion contra core dumps.
 
-- comandos exactos ejecutados,
-- archivos de salida generados automaticamente,
-- resultados sin editar manualmente,
-- interpretacion tecnica corta por escenario.
+## Por que 4096 bytes es razonable
 
-Checklist de evidencia:
+El baseline plano usa bloques de `4096` bytes. Ese tamano es razonable porque
+coincide con el tamano de pagina comun en Linux y con unidades tipicas de
+trabajo del sistema de archivos. Es suficientemente grande para evitar miles de
+syscalls diminutas y suficientemente pequeno para no ocultar el comportamiento
+del kernel en `strace`.
 
-1. Salida de `make profile`.
-2. `results/baseline.strace.txt`.
-3. `results/compressed_write.strace.txt`.
-4. `results/compressed_mmap.strace.txt`.
-5. `results/baseline.time.txt`.
-6. `results/compressed_write.time.txt`.
-7. `results/compressed_mmap.time.txt`.
-8. Archivos generados `plain_50mb.txt`, `write_50mb.ceio`, `mmap_50mb.ceio`.
-9. Captura o copia textual de `strings` y `hexdump` sobre un `.ceio`.
+En `/usr/bin/time -v`, el campo `Page size (bytes)` permite confirmar el tamano
+de pagina del entorno de prueba.
 
-Interpretacion sugerida:
+## Escenarios exactos del benchmark
 
-- Baseline: deberia mostrar muchas llamadas `write` y cero compresion.
-- Compressed-write: deberia reducir tamano en disco y concentrar escritura en
-  menos operaciones grandes.
-- Compressed-mmap: deberia evidenciar uso de `mmap`/`munmap` y permitir
-  comparar cambios en `sys time` y patron de syscalls frente a `write`.
+| Letra | Modo CLI | Archivo generado | Que mide |
+|---|---|---|---|
+| A | `baseline` | `plain_50mb.txt` | Texto plano directo, bloques de 4096 bytes |
+| B | `compressed-write` | `compressed_write_50mb.bin` | `zlib` sin cifrado, escritura con `write` |
+| C | `encrypted-write` | `encrypted_write_50mb.ceio` | `zlib` + `crypto_ceio` + formato `.ceio` |
 
-## Explicacion de validacion con valgrind
+Evidencia adicional de backend:
 
-`valgrind` se ejecuta sobre pruebas no interactivas. Esto permite detectar fugas
-en el core y en la persistencia sin depender de la UI de `ncurses`.
+| Modo CLI | Archivo generado | Que compara |
+|---|---|---|
+| `compressed-mmap` | `compressed_mmap_50mb.bin` | Compresion sola con backend `mmap` |
+| `encrypted-mmap` | `encrypted_mmap_50mb.ceio` | Compresion+cifrado con backend `mmap` |
 
-## Tabla para resultados reales
+## Comandos reproducibles
 
-| Metrica | Baseline plano | Compressed write | Compressed mmap | Interpretacion |
-|--------|----------------|------------------|-----------------|----------------|
-| Tamano original | 52,428,800 bytes | 52,428,800 bytes | 52,428,800 bytes | Los tres escenarios parten del mismo volumen de datos, por lo que la comparacion es valida. |
-| Tamano escrito | 52,428,800 bytes | 178,087 bytes | 178,087 bytes | La compresion reduce drasticamente el archivo final respecto al baseline plano. |
-| write calls | 819,206 | 7 | 6 | El baseline castiga al kernel con escrituras pequeñas; el pipeline comprimido reduce las llamadas a unas pocas operaciones grandes. |
-| mmap calls | 13 | 15 | 16 | Solo el escenario `compressed-mmap` usa `mmap` como backend de guardado; aun asi los tres procesos usan algunos `mmap` del runtime y del loader. |
-| user time | 0.74 s | 0.14 s | 0.14 s | El costo de CPU en user space del pipeline comprimido es bajo frente al baseline. |
-| sys time | 10.81 s | 0.03 s | 0.03 s | El baseline concentra el costo en el kernel por la enorme cantidad de syscalls `write`. |
-| real time | 2:11.47 | 0:00.16 | 0:00.17 | El pipeline comprimido es varias ordenes de magnitud mas rapido en tiempo total observado. |
+Compilar:
 
-Metricas complementarias observadas:
+```sh
+make clean && make
+```
 
-- Reduccion aproximada de tamano en `compressed-write` y `compressed-mmap`: `99.66%`.
-- `compressed-mmap` mostro `1` llamada a `msync` y `1` llamada a `ftruncate`, coherentes con su backend.
-- Memoria residente maxima:
-  `baseline` 52,736 KB,
-  `compressed-write` 53,120 KB,
-  `compressed-mmap` 53,248 KB.
-- Cambios de contexto voluntarios:
-  `baseline` 819,227,
-  `compressed-write` 29,
-  `compressed-mmap` 76.
+Pruebas:
 
+```sh
+make test
+```
 
+Generar evidencia completa:
 
-## Conclusiones
+```sh
+make profile
+```
 
+Ejecutar el script con salida alternativa y menor tamano:
 
-Con base en los resultados reales de `results/`, se pueden defender las
-siguientes conclusiones academicas:
+```sh
+SIZE_MB=1 RESULTS_DIR=build/profile-test bash scripts/run_profile.sh
+```
 
-1. El baseline plano es intencionalmente ineficiente y cumple bien su papel de
-comparacion. Sus `819,206` llamadas a `write` elevan el `sys time` a `10.81 s`
-y el tiempo real a `2:11.47`, mostrando el costo de escribir en fragmentos
-pequenos.
+Comandos equivalentes para los tres escenarios principales:
 
-2. El pipeline comprimido no solo reduce almacenamiento, sino tambien costo de
-I/O. Tanto `compressed-write` como `compressed-mmap` transforman `50 MB` de
-texto en solo `178,087 bytes`, una reduccion cercana al `99.66%`.
+```sh
+strace -c -o results/baseline.strace.txt \
+  ./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
+/usr/bin/time -v -o results/baseline.time.txt \
+  ./build/bench_io --mode=baseline --size-mb=50 --output=results/plain_50mb.txt
 
-3. La disminucion drastica de syscalls explica buena parte de la mejora de
-rendimiento. Pasar de cientos de miles de `write` a solo `6-7` escrituras
-reduce fuertemente la intervencion del kernel y los cambios de contexto.
+strace -c -o results/compressed_write.strace.txt \
+  ./build/bench_io --mode=compressed-write --size-mb=50 --output=results/compressed_write_50mb.bin
+/usr/bin/time -v -o results/compressed_write.time.txt \
+  ./build/bench_io --mode=compressed-write --size-mb=50 --output=results/compressed_write_50mb.bin
 
-4. En este experimento, `write` y `mmap` tienen desempenos globales muy
-cercanos. Ambos escenarios comprimidos muestran `0.14 s` de `user time` y
-`0.03 s` de `sys time`, con tiempos reales de `0.16 s` y `0.17 s`
-respectivamente. Esto sugiere que, para este volumen y este patron de acceso,
-la diferencia dominante no es el backend final sino la compresion y la enorme
-reduccion del volumen escrito.
+strace -c -o results/encrypted_write.strace.txt \
+  ./build/bench_io --mode=encrypted-write --size-mb=50 --output=results/encrypted_write_50mb.ceio
+/usr/bin/time -v -o results/encrypted_write.time.txt \
+  ./build/bench_io --mode=encrypted-write --size-mb=50 --output=results/encrypted_write_50mb.ceio
+```
 
-5. El backend `mmap` deja una huella de syscalls consistente con su diseño:
-aparecen `mmap`, `munmap`, `msync` y `ftruncate`. El backend `write`, en cambio,
-mantiene una traza mas simple centrada en pocas llamadas `write`. Esto permite
-justificar experimentalmente la comparacion pedida por la rubrica.
+## Tabla final de benchmarking
 
-6. El consumo de memoria residente maxima se mantiene del mismo orden en los
-tres escenarios, alrededor de `52-53 MB`. Por lo tanto, el hallazgo principal
-de la etapa no es una mejora fuerte de memoria, sino una mejora clara en
-persistencia, tamano final y costo de interaccion con el sistema operativo.
+`scripts/run_profile.sh` genera esta tabla automaticamente en
+`results/benchmark_summary.md`:
+
+| Metrica del Kernel | A. Clasico (Plano directo) | B. Solo Compresion | C. Compresion + Encriptacion | Impacto Final (A vs C) |
+|---|---:|---:|---:|---|
+| Tamano Transmitido (I/O) | valor de `baseline` | valor de `compressed-write` | valor de `encrypted-write` | Porcentaje de cambio de A a C |
+| Tiempo de CPU (User Mode) | `User time` | `User time` | `User time` | Costo extra por compresion+cifrado |
+| Tiempo de Espera I/O | `System time` | `System time` | `System time` | Proxy de latencia kernel/sys |
+| Tiempo Total (Wall-clock) | `Elapsed` | `Elapsed` | `Elapsed` | Rentabilidad final |
+
+Formato esperado para pegar resultados reales:
+
+| Metrica del Kernel | A. Clasico (Plano directo) | B. Solo Compresion | C. Compresion + Encriptacion | Impacto Final (A vs C) |
+|---|---:|---:|---:|---|
+| Tamano Transmitido (I/O) | 50 MB | completar | completar | completar |
+| Tiempo de CPU (User Mode) | completar | completar | completar | completar |
+| Tiempo de Espera I/O | completar | completar | completar | completar |
+| Tiempo Total (Wall-clock) | completar | completar | completar | completar |
+
+## Como cambian los resultados entre A, B y C
+
+Lectura esperada:
+
+- A escribe mas bytes, pero consume poca CPU de transformacion.
+- B aumenta CPU por `zlib`, pero reduce mucho el tamano transmitido al kernel.
+- C agrega costo de cifrado y padding de bloque sobre B, pero mantiene casi toda
+  la reduccion de I/O frente a A.
+- Si C reduce el tiempo total frente a A, la conclusion es que el ahorro de I/O
+  compensa el costo de CPU.
+- Si C no reduce el tiempo total, aun puede justificarse por seguridad, pero ya
+  no como optimizacion de rendimiento en ese entorno.
+
+## Conclusiones preliminares
+
+Con datos repetitivos como el texto sintetico del benchmark, la compresion debe
+reducir drasticamente el tamano final. La encriptacion agrega CPU y algunos bytes
+por IV, header y padding, pero no deberia destruir la ganancia de I/O porque se
+aplica despues de comprimir.
+
+La conclusion de rentabilidad debe salir de `results/benchmark_summary.md`: si
+`Impacto Final (A vs C)` en wall-clock es negativo, el sistema final es mas
+rapido que el plano directo y ademas cifra. Si es positivo, el costo de CPU del
+entorno supera el ahorro de I/O y se defiende como mejora de seguridad, no de
+velocidad.
+
+## Preguntas trampa y respuestas esperadas
+
+| Pregunta | Respuesta esperada |
+|---|---|
+| Por que no se cifra antes de comprimir? | Porque el cifrado elimina patrones y hace que `zlib` casi no pueda reducir tamano. |
+| La IV debe ser secreta? | No. Debe ser unica/impredecible por mensaje, pero puede ir en el header. |
+| La clave queda en disco? | No por este flujo. Se pide en UI, se conserva solo en RAM durante la sesion y se limpia al salir. |
+| Se elimina todo riesgo de que la clave toque disco? | No completamente; swap y core dumps dependen del sistema operativo. |
+| Por que `System time` se usa como espera I/O? | Es un proxy practico del costo en kernel; se complementa con `strace -c` para ver syscalls. |
+| Que demuestra `compressed-write` frente a `encrypted-write`? | Aisla el costo extra del cifrado y padding despues de tener el beneficio de compresion. |
+| Por que 4096 bytes? | Coincide con una pagina comun de memoria y evita micro-syscalls artificiales. |
+| `mmap` siempre sera mas rapido que `write`? | No. Depende del tamano, patron de acceso, page faults y sincronizacion. Por eso se mide. |

@@ -7,7 +7,7 @@
 static void print_usage(const char *program_name) {
     fprintf(
         stderr,
-        "Usage: %s --mode=baseline|compressed-write|compressed-mmap --size-mb=50 --output=archivo\n",
+        "Usage: %s --mode=baseline|compressed-write|compressed-mmap|encrypted-write|encrypted-mmap --size-mb=50 --output=archivo\n",
         program_name
     );
 }

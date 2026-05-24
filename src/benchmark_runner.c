@@ -1,5 +1,6 @@
 #include "benchmark_runner.h"
 
+#include "compress_zlib.h"
 #include "editor_file.h"
 
 #include <fcntl.h>
@@ -11,9 +12,9 @@
 
 static const unsigned char BENCH_KEY[] = "default_test_key";
 
-static int write_all_small_chunks(int fd, const unsigned char *data, size_t size) {
+static int write_all_fixed_chunks(int fd, const unsigned char *data, size_t size) {
     size_t offset = 0;
-    const size_t chunk_size = 64u;
+    const size_t chunk_size = 4096u;
 
     while (offset < size) {
         size_t remaining = size - offset;
@@ -69,7 +70,7 @@ static int run_baseline_plain(const BenchmarkConfig *config, const unsigned char
         return -1;
     }
 
-    int result = write_all_small_chunks(fd, data, size);
+    int result = write_all_fixed_chunks(fd, data, size);
     if (close(fd) != 0) {
         return -1;
     }
@@ -78,6 +79,22 @@ static int run_baseline_plain(const BenchmarkConfig *config, const unsigned char
 
 static int run_compressed(const BenchmarkConfig *config, const unsigned char *data, size_t size) {
     CeioIoMode mode = config->mode == BENCHMARK_MODE_COMPRESSED_MMAP
+        ? CEIO_IO_MMAP
+        : CEIO_IO_WRITE;
+    unsigned char *compressed = NULL;
+    size_t compressed_size = 0;
+
+    if (compress_buffer(data, size, &compressed, &compressed_size) != 0) {
+        return -1;
+    }
+
+    int result = io_backend_write_file(config->output_path, compressed, compressed_size, mode);
+    free(compressed);
+    return result;
+}
+
+static int run_encrypted(const BenchmarkConfig *config, const unsigned char *data, size_t size) {
+    CeioIoMode mode = config->mode == BENCHMARK_MODE_ENCRYPTED_MMAP
         ? CEIO_IO_MMAP
         : CEIO_IO_WRITE;
 
@@ -107,20 +124,52 @@ int benchmark_parse_mode(const char *value, BenchmarkMode *out_mode) {
         *out_mode = BENCHMARK_MODE_COMPRESSED_MMAP;
         return 0;
     }
+    if (strcmp(value, "encrypted-write") == 0 ||
+        strcmp(value, "compressed-encrypted-write") == 0) {
+        *out_mode = BENCHMARK_MODE_ENCRYPTED_WRITE;
+        return 0;
+    }
+    if (strcmp(value, "encrypted-mmap") == 0 ||
+        strcmp(value, "compressed-encrypted-mmap") == 0) {
+        *out_mode = BENCHMARK_MODE_ENCRYPTED_MMAP;
+        return 0;
+    }
     return -1;
 }
 
 const char *benchmark_mode_name(BenchmarkMode mode) {
     switch (mode) {
         case BENCHMARK_MODE_BASELINE:
-            return "baseline-plain-small-writes";
+            return "baseline-plain-direct";
         case BENCHMARK_MODE_COMPRESSED_WRITE:
             return "compressed-write";
         case BENCHMARK_MODE_COMPRESSED_MMAP:
             return "compressed-mmap";
+        case BENCHMARK_MODE_ENCRYPTED_WRITE:
+            return "encrypted-write";
+        case BENCHMARK_MODE_ENCRYPTED_MMAP:
+            return "encrypted-mmap";
         default:
             return "unknown";
     }
+}
+
+static int benchmark_mode_uses_mmap(BenchmarkMode mode) {
+    return mode == BENCHMARK_MODE_COMPRESSED_MMAP || mode == BENCHMARK_MODE_ENCRYPTED_MMAP;
+}
+
+static int benchmark_mode_uses_encryption(BenchmarkMode mode) {
+    return mode == BENCHMARK_MODE_ENCRYPTED_WRITE || mode == BENCHMARK_MODE_ENCRYPTED_MMAP;
+}
+
+static const char *benchmark_pipeline_name(BenchmarkMode mode) {
+    if (mode == BENCHMARK_MODE_BASELINE) {
+        return "plain";
+    }
+    if (benchmark_mode_uses_encryption(mode)) {
+        return "compression+encryption";
+    }
+    return "compression-only";
 }
 
 int benchmark_run(const BenchmarkConfig *config) {
@@ -138,6 +187,8 @@ int benchmark_run(const BenchmarkConfig *config) {
 
     if (config->mode == BENCHMARK_MODE_BASELINE) {
         result = run_baseline_plain(config, data, original_size);
+    } else if (benchmark_mode_uses_encryption(config->mode)) {
+        result = run_encrypted(config, data, original_size);
     } else {
         result = run_compressed(config, data, original_size);
     }
@@ -157,14 +208,16 @@ int benchmark_run(const BenchmarkConfig *config) {
     }
 
     printf("mode: %s\n", benchmark_mode_name(config->mode));
+    printf("pipeline: %s\n", benchmark_pipeline_name(config->mode));
+    printf("encryption: %s\n", benchmark_mode_uses_encryption(config->mode) ? "xtea-cbc" : "none");
     printf("original_size_bytes: %zu\n", original_size);
     printf("final_size_bytes: %zu\n", final_size);
     printf("reduction_percent: %.2f\n", reduction);
     printf("output_file: %s\n", config->output_path);
     printf(
         "io_mode: %s\n",
-        config->mode == BENCHMARK_MODE_COMPRESSED_MMAP ? "mmap" :
-        (config->mode == BENCHMARK_MODE_COMPRESSED_WRITE ? "write" : "write-small-chunks")
+        config->mode == BENCHMARK_MODE_BASELINE ? "write-4096-byte-chunks" :
+        (benchmark_mode_uses_mmap(config->mode) ? "mmap" : "write")
     );
 
     free(data);
