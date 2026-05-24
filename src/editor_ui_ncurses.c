@@ -259,6 +259,7 @@ static int editor_ui_load_existing_file(EditorApp *app, EditorViewport *viewport
             return -1;
         }
         if (editor_app_load(app) == 0) {
+            editor_app_clear_key(app);
             return 0;
         }
         editor_app_clear_key(app);
@@ -273,6 +274,7 @@ static void editor_ui_save(EditorApp *app) {
         return;
     }
     editor_app_save(app);
+    editor_app_clear_key(app);
 }
 
 static void editor_ui_handle_key(EditorApp *app, int key_code) {
