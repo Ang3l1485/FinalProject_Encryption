@@ -189,10 +189,10 @@ Archivo de prueba sugerido: documento sintetico de 50 MB.
 
 | Metrica del Kernel | A. Clasico (Plano directo) | B. Solo Compresion | C. Compresion + Encriptacion | Impacto Final (A vs C) |
 |---|---:|---:|---:|---|
-| Tamano Transmitido (I/O) | 50 MB | completar con resultado | completar con resultado | % de reduccion o aumento |
-| Tiempo de CPU (User Mode) | completar | completar | completar | overhead de CPU |
-| Tiempo de Espera I/O | completar | completar | completar | ahorro de latencia kernel/sys |
-| Tiempo Total (Wall-clock) | completar | completar | completar | conclusion de rentabilidad |
+| Tamano Transmitido (I/O) | 50 MB | 0.2 MB | 0.2 MB | -99.7% |
+| Tiempo de CPU (User Mode) | 0.0 ms | 120.0 ms | 130.0 ms | n/a |
+| Tiempo de Espera I/O | 70.0 ms | 10.0 ms | 10.0 ms | -85.7% |
+| Tiempo Total (Wall-clock) | 1290.0 ms | 160.0 ms | 150.0 ms | -88.4% |
 
 El script `scripts/run_profile.sh` genera automaticamente la tabla en:
 
