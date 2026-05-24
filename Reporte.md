@@ -266,31 +266,6 @@ strace -c -o results/encrypted_write.strace.txt \
   ./build/bench_io --mode=encrypted-write --size-mb=50 --output=results/encrypted_write_50mb.ceio
 ```
 
-## Interpretacion esperada
-
-Una buena conclusion no debe decir que cifrar no cuesta. Debe decir:
-
-> Anadir seguridad aumenta el tiempo de CPU y puede sumar padding, pero el
-> sistema sigue siendo rentable si la reduccion de I/O mantiene el tiempo total
-> cerca o por debajo del enfoque clasico inseguro.
-
-Si el resultado final muestra que C ocupa mucho menos espacio y tiene wall-clock
-similar o menor que A, el sistema logro el equilibrio: archivo cifrado, menos
-bytes en disco y tiempo competitivo.
-
-## Preguntas trampa y respuestas
-
-| Pregunta | Respuesta esperada |
-|---|---|
-| Por que no cifrar antes de comprimir? | Porque el cifrado aumenta la entropia y destruye los patrones que necesita el compresor. |
-| El IV debe ser secreto? | No. Debe ser unico o impredecible, pero puede guardarse en el header. |
-| La clave esta hardcoded? | No en el flujo interactivo. Se pide por UI y no viaja por `argv`. |
-| El benchmark usa clave fija? | Si, para automatizar mediciones repetibles; no representa el flujo de usuario final. |
-| La llave queda en RAM despues de usarla? | La UI borra el buffer temporal y limpia la copia operativa despues de abrir o guardar. |
-| Que pasa con swap? | Se reduce el riesgo limpiando memoria y acortando vida de la clave, pero el OS puede requerir politicas adicionales. |
-| Como se mide el costo de cifrar? | Comparando `encrypted-write` contra `compressed-write` en `User time`. |
-| Como se mide el ahorro de I/O? | Comparando tamano final, `System time` y syscalls de `strace`. |
-| `mmap` siempre gana? | No. Depende del patron de acceso, page faults y sincronizacion. Por eso se mide aparte. |
 
 ## Conclusion
 
